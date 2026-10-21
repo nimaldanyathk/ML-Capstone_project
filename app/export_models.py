@@ -1,4 +1,4 @@
-"""Export every Review 1 model plus the preprocessing artifacts the Streamlit app
+"""Export every notebook model plus the preprocessing artifacts the Streamlit app
 needs. This re-creates the exact notebook preprocessing and hyperparameters so
 the app predicts with the same models reported in the notebooks.
 
@@ -14,10 +14,12 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.base import clone
-from sklearn.cluster import KMeans
+from scipy.cluster.hierarchy import cut_tree, linkage
+from sklearn.cluster import AgglomerativeClustering, KMeans
 from sklearn.compose import ColumnTransformer
 from sklearn.decomposition import PCA
-from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+from sklearn.ensemble import (AdaBoostClassifier, BaggingClassifier, GradientBoostingClassifier, GradientBoostingRegressor,
+                              RandomForestClassifier, RandomForestRegressor)
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, LogisticRegression, Ridge
 from sklearn.metrics import (accuracy_score, calinski_harabasz_score, classification_report, confusion_matrix,
@@ -66,10 +68,16 @@ NOTEBOOK_REGRESSION = {
     "Lasso": 0.0385, "Decision Tree": 0.0367, "KNN": 0.0359, "Linear": 0.0339, "Polynomial": 0.0158,
 }
 NOTEBOOK_CLASSIFICATION = {
+    "Random Forest (tuned)": 0.8593, "Random Forest (baseline)": 0.8600,
+    "Gradient Boosting (tuned)": 0.8532, "Gradient Boosting (baseline)": 0.8612,
+    "AdaBoost (tuned)": 0.8264, "AdaBoost (baseline)": 0.8022,
     "SVC": 0.8197, "Decision Tree (tuned)": 0.8190, "Logistic Regression": 0.8132, "Decision Tree (baseline)": 0.7938,
     "KNN (tuned)": 0.7822, "KNN (baseline)": 0.7705, "Gaussian Naive Bayes": 0.6186,
     "MLP (tuned)": 0.8124, "MLP (baseline)": 0.8043,
+    "Bagging (tuned)": 0.8532, "Bagging (baseline)": 0.8443,
 }
+#the notebook's final choice (classification.ipynb, section 25), chosen by 5-fold cross-validation on the training rows
+FINAL_CLASSIFIER = {"name": "Random Forest (tuned)", "why": "chosen by 5-fold cross-validation on the training rows, where its weighted F1 of 0.8473 is the highest of all ten algorithms; 300 trees, max depth 20, min samples split 5. Held-out: accuracy 0.864, weighted F1 0.859, ROC-AUC 0.963."}
 
 
 def export_regression():
@@ -219,6 +227,17 @@ def export_classification():
 
     #every classifier in the notebook (part a, plus part b as sections land) with the settings it used or its grid search picked
     specs = [
+        ("Random Forest (tuned)", RandomForestClassifier(n_estimators=300, max_depth=20, min_samples_split=5, random_state=RANDOM_STATE),
+         "300 trees, max depth 20, min split 5"),
+        ("Random Forest (baseline)", RandomForestClassifier(random_state=RANDOM_STATE), "default 100 trees, unlimited depth"),
+        ("AdaBoost (tuned)", AdaBoostClassifier(n_estimators=200, learning_rate=1.0, random_state=RANDOM_STATE),
+         "200 estimators, learning rate 1.0"),
+        ("AdaBoost (baseline)", AdaBoostClassifier(random_state=RANDOM_STATE), "default 50 estimators, learning rate 1.0"),
+        ("Gradient Boosting (tuned)", GradientBoostingClassifier(n_estimators=150, learning_rate=0.1, max_depth=2,
+                                                                 random_state=RANDOM_STATE),
+         "150 stages, learning rate 0.1, max depth 2"),
+        ("Gradient Boosting (baseline)", GradientBoostingClassifier(random_state=RANDOM_STATE),
+         "default 100 stages, learning rate 0.1, max depth 3"),
         ("SVC", SVC(kernel="rbf", C=10, gamma="scale", probability=True, random_state=RANDOM_STATE), "RBF kernel, C 10"),
         ("Decision Tree (tuned)", DecisionTreeClassifier(criterion="gini", max_depth=8, min_samples_leaf=1, min_samples_split=2,
                                                          random_state=RANDOM_STATE), "gini, max depth 8"),
@@ -231,6 +250,11 @@ def export_classification():
                                       validation_fraction=0.1, n_iter_no_change=15, max_iter=400, random_state=RANDOM_STATE),
          "128 relu units, alpha 0.1, early stopping"),
         ("MLP (baseline)", MLPClassifier(max_iter=500, random_state=RANDOM_STATE), "100 relu units, defaults"),
+        ("Bagging (tuned)", BaggingClassifier(estimator=DecisionTreeClassifier(random_state=RANDOM_STATE), n_estimators=100,
+                                             max_samples=1.0, max_features=0.5, bootstrap=True, random_state=RANDOM_STATE),
+         "100 full trees, 100% of rows and 50% of features per tree"),
+        ("Bagging (baseline)", BaggingClassifier(estimator=DecisionTreeClassifier(random_state=RANDOM_STATE), random_state=RANDOM_STATE),
+         "default 10 full trees, all rows and features"),
     ]
     models = {}
     for name, est, params in specs:
@@ -266,7 +290,8 @@ def export_classification():
     bundle = {
         "models": models,
         "model_order": order,
-        "best": order[0],
+        "best": FINAL_CLASSIFIER["name"],
+        "final_model": FINAL_CLASSIFIER,
         "feature_columns": features,
         "key_features": key_features,
         "classes": classes,
@@ -291,7 +316,11 @@ CLU_FEATURES = {
     'st_logg': 'Star surface gravity (log g)', 'st_rad': 'Star radius (Solar radii)',
 }
 CLU_LOG_FEATURES = ['pl_orbper', 'pl_trandurh', 'pl_trandep', 'pl_rade', 'pl_insol', 'st_dist', 'st_rad']
-NOTEBOOK_CLUSTERING = {"Silhouette": 0.2752, "Davies-Bouldin": 1.5022, "Calinski-Harabasz": 2967.3}
+NOTEBOOK_CLUSTERING = {
+    "K-Means": {"Silhouette": 0.2752, "Davies-Bouldin": 1.5024, "Calinski-Harabasz": 2969.0},
+    "Agglomerative": {"Silhouette": 0.1943, "Davies-Bouldin": 1.8368, "Calinski-Harabasz": 1777.4},
+}
+TOI_SNAPSHOT = "19 Oct 2026"
 TOI_URL = "https://exoplanetarchive.ipac.caltech.edu/TAP/sync?query=select+*+from+toi&format=csv"
 
 
@@ -330,8 +359,33 @@ def export_clustering():
     best = sweep.loc[sweep["k"] == 2].iloc[0]
     reported = {"Silhouette": best["silhouette"], "Davies-Bouldin": best["davies_bouldin"], "Calinski-Harabasz": best["calinski_harabasz"]}
     for name, val in reported.items():
-        flag = "" if abs(val - NOTEBOOK_CLUSTERING[name]) < 0.001 * max(1, NOTEBOOK_CLUSTERING[name]) else "   <-- differs from the notebook"
+        ref = NOTEBOOK_CLUSTERING["K-Means"][name]
+        flag = "" if abs(val - ref) < 0.001 * max(1, ref) else "   <-- differs from the notebook"
         print(f"  K-Means k=2 {name:18s} {val:.4f}{flag}")
+
+    #agglomerative hierarchical clustering, section d of the notebook: complete linkage cut at k = 2, plus the linkage sweep behind that choice
+    agg_labels = AgglomerativeClustering(n_clusters=2, linkage="complete", metric="euclidean").fit_predict(X)
+    agg_metrics = {"Silhouette": float(silhouette_score(X, agg_labels)), "Davies-Bouldin": float(davies_bouldin_score(X, agg_labels)),
+                   "Calinski-Harabasz": float(calinski_harabasz_score(X, agg_labels))}
+    for name, val in agg_metrics.items():
+        ref = NOTEBOOK_CLUSTERING["Agglomerative"][name]
+        flag = "" if abs(val - ref) < 0.001 * max(1, ref) else "   <-- differs from the notebook"
+        print(f"  Agglomerative complete k=2 {name:18s} {val:.4f}{flag}")
+    Xn = X.to_numpy()
+    agg_means = np.vstack([Xn[agg_labels == c].mean(axis=0) for c in range(2)])
+    #name the two groups by their planet-radius mean, so the order cannot flip between runs
+    agg_small = int(np.argmin(agg_means[:, features.index("pl_rade")]))
+    agg_names = {agg_small: "Smaller planets on longer orbits around cool, nearby stars",
+                 1 - agg_small: "Hot, large-planet signals around distant, larger stars"}
+    agg_sweep = []
+    for method in ("ward", "complete", "average"):
+        tree = linkage(Xn, method=method, metric="euclidean")
+        for k in range(2, 7):
+            lab = cut_tree(tree, n_clusters=k).ravel()
+            agg_sweep.append({"linkage": method, "k": k, "smallest_share": float(np.bincount(lab).min() / len(lab) * 100),
+                              "silhouette": float(silhouette_score(X, lab)), "davies_bouldin": float(davies_bouldin_score(X, lab)),
+                              "calinski_harabasz": float(calinski_harabasz_score(X, lab))})
+    agg_sweep = pd.DataFrame(agg_sweep)
 
     pca = PCA(n_components=2, random_state=RANDOM_STATE).fit(X)
     group_map = {"CP": "planet", "KP": "planet", "PC": "candidate", "APC": "candidate", "FP": "not a planet", "FA": "not a planet"}
@@ -350,10 +404,13 @@ def export_clustering():
         "disp_group": df["tfopwg_disp"].map(group_map).fillna("unknown").tolist(),
         "kmeans": kmeans, "sweep": sweep, "best_k": 2, "cluster_names": {2: names2},
         "feature_medians": {f: float(X_raw[f].median()) for f in features},
-        "n_rows": int(len(df)), "downloaded": "14 Oct 2026",
+        "agglomerative": {"linkage": "complete", "k": 2, "labels": agg_labels.astype(np.int8), "metrics": agg_metrics,
+                          "sizes": np.bincount(agg_labels).tolist(), "means": agg_means.astype(np.float32),
+                          "cluster_names": agg_names, "sweep": agg_sweep},
+        "n_rows": int(len(df)), "downloaded": TOI_SNAPSHOT,
     }
     joblib.dump(bundle, MODELS / "clustering_kmeans.pkl", compress=3)
-    return reported
+    return {"K-Means": reported, "Agglomerative": agg_metrics}
 
 
 if __name__ == "__main__":
